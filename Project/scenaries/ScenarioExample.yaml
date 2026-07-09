@@ -1,0 +1,49 @@
+version: 1
+
+meta:
+  name: "demo_quad_basic"
+  description: "Простой сценарий: висение, небольшой тангаж, рысканье"
+  author: "lab_user"
+  created_at: "2026-07-09"
+
+settings:
+  loop: false          # повторять ли сценарий
+  default_update_rate_hz: 50
+
+steps:
+  - id: 1
+    name: "takeoff"
+    type: "climb_rate"
+    params:
+      rate: 0.5        # условная скороподъёмность (нормированная)
+    duration: 3.0      # секунды
+
+  - id: 2
+    name: "hover"
+    type: "hover"
+    params:
+      power: 0.6       # базовый уровень тяги (нормированная мощность)
+    duration: 2.0
+
+  - id: 3
+    name: "pitch_forward"
+    type: "attitude"
+    params:
+      axis: "pitch"
+      angle: 0.2       # радианы (или условная величина)
+    duration: 1.5
+
+  - id: 4
+    name: "yaw_right"
+    type: "yaw"
+    params:
+      angle: 0.5       # радианы
+    duration: 2.0
+
+  - id: 5
+    name: "roll_left"
+    type: "attitude"
+    params:
+      axis: "roll"
+      angle: -0.15
+    duration: 1.0
