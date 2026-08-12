@@ -88,7 +88,7 @@ class ConfigTab(QWidget):
     # 1. Заголовок (Компактный сверху)
     title_label = QLabel("КОНФИГУРАЦИЯ И СХЕМА СТЕНДА")
     title_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-    title_label.setStyleSheet("color: #4A90E2; margin-bottom: 2px;")
+    title_label.setStyleSheet("color: #000000; margin-bottom: 2px;")
     right_layout.addWidget(title_label)
 
     # 2. Краткая характеристика стенда (По центру)
@@ -98,26 +98,28 @@ class ConfigTab(QWidget):
         " border-radius: 6px; padding: 4px; }"
     )
     info_card_layout = QGridLayout(self.info_card)
+    info_card_layout.setContentsMargins(8, 6, 8, 6)
 
-    self.lbl_info_name = QLabel("Модель: --")
-    self.lbl_info_mass = QLabel("Масса: -- кг")
-    self.lbl_info_motors = QLabel("Моторов: --")
-    self.lbl_info_prop = QLabel("Винты: --")
+    self.lbl_info_motors = QLabel("Моторы: -- / --")
+    self.lbl_info_mass = QLabel("Масса: --")
+    self.lbl_info_prop = QLabel("Винты: -- / --")
+    self.lbl_info_sensors = QLabel("Датчики: --")
 
     lbl_font = QFont("Consolas", 9)
     for lbl in [
-        self.lbl_info_name,
-        self.lbl_info_mass,
         self.lbl_info_motors,
+        self.lbl_info_mass,
         self.lbl_info_prop,
+        self.lbl_info_sensors,
     ]:
-      lbl.setFont(lbl_font)
-      lbl.setStyleSheet("color: #E0E0E0;")
+        lbl.setFont(lbl_font)
+        lbl.setStyleSheet("color: #E0E0E0;")
 
-    info_card_layout.addWidget(self.lbl_info_name, 0, 0)
+    # Сетка 2x2
+    info_card_layout.addWidget(self.lbl_info_motors, 0, 0)
     info_card_layout.addWidget(self.lbl_info_mass, 0, 1)
-    info_card_layout.addWidget(self.lbl_info_motors, 1, 0)
-    info_card_layout.addWidget(self.lbl_info_prop, 1, 1)
+    info_card_layout.addWidget(self.lbl_info_prop, 1, 0)
+    info_card_layout.addWidget(self.lbl_info_sensors, 1, 1)
 
     right_layout.addWidget(self.info_card)
 
@@ -134,17 +136,52 @@ class ConfigTab(QWidget):
 
   def update_info_card(self, data: dict):
     """Обновляет блок кратких характеристик."""
-    name = data.get("drone_name", "Н/Д")
+    # 1. Моторы: кол-во / модель
+    motors_list = data.get("motors", [])
+    motors_cnt = len(motors_list)
+
+    motor_profile = data.get("motor_profile", {})
+    motor_model = motor_profile.get("motor_type", "Н/Д")
+
+    # Запасной вариант: берем модель из первого элемента списка моторов
+    if (
+            motor_model == "Н/Д"
+            and motors_list
+            and isinstance(motors_list[0], dict)
+    ):
+        motor_model = motors_list[0].get("model", "Н/Д")
+
+    # 2. Масса
     mass = data.get("physics", {}).get("total_weight_kg", "Н/Д")
-    motors_cnt = len(data.get("motors", []))
+    mass_str = f"{mass} кг" if mass != "Н/Д" else "Н/Д"
 
-    prop = data.get("motor_profile", {}).get("propeller", {})
-    prop_str = f"{prop.get('diameter_inches', '?')}\"x{prop.get('pitch_inches', '?')}"
+    # 3. Винты: диаметр / кол-во лопастей
+    prop = motor_profile.get("propeller", {})
+    prop_diam = prop.get("diameter_inches", "?")
+    prop_blades = prop.get("blades", prop.get("blades_count", "?"))
 
-    self.lbl_info_name.setText(f"Модель: {name}")
-    self.lbl_info_mass.setText(f"Масса: {mass} кг")
-    self.lbl_info_motors.setText(f"Моторов: {motors_cnt}")
-    self.lbl_info_prop.setText(f"Винты: {prop_str}")
+    # 4. Датчики (поддержка списка строк или списка словарей)
+    sensors_raw = data.get("sensors", [])
+    if isinstance(sensors_raw, list):
+        sensor_names = []
+        for s in sensors_raw:
+            if isinstance(s, dict):
+                sensor_names.append(s.get("type", s.get("name", "Датчик")))
+            else:
+                sensor_names.append(str(s))
+        sensors_str = ", ".join(sensor_names) if sensor_names else "Отсутствуют"
+    elif isinstance(sensors_raw, dict):
+        sensors_str = ", ".join(sensors_raw.keys())
+    else:
+        sensors_str = str(sensors_raw) if sensors_raw else "Отсутствуют"
+
+    # Форматирование текста
+    self.lbl_info_motors.setText(f"Моторы: {motors_cnt} / {motor_model}")
+    self.lbl_info_mass.setText(f"Масса: {mass_str}")
+    self.lbl_info_prop.setText(
+        f"Винты: {prop_diam}\" / {prop_blades} лоп."
+    )
+    self.lbl_info_sensors.setText(f"Датчики: {sensors_str}")
 
   def browse_file(self):
     file_path, _ = QFileDialog.getOpenFileName(

@@ -121,9 +121,6 @@ class StandViewWidget(QWidget):
             painter.setPen(border_color)
             painter.drawText(int(mx + prop_radius_px * 0.7), int(my), spin)
 
-        # 4. Вывод информационного блока характеристик стенда
-        self._draw_info_overlay(painter, physics, motor_prof, len(motors))
-
     def _draw_grid(self, painter, w, h):
         pen = QPen(QColor("#222222"), 1, Qt.DotLine)
         painter.setPen(pen)
@@ -132,23 +129,3 @@ class StandViewWidget(QWidget):
             painter.drawLine(x, 0, x, h)
         for y in range(0, h, step):
             painter.drawLine(0, y, w, y)
-
-    def _draw_info_overlay(self, painter, physics, motor_prof, motor_count):
-        painter.setFont(QFont("Consolas", 9))
-        info_text = (
-            f"=== Свойства стенда ===\n"
-            f"Моторов: {motor_count}\n"
-            f"Масса: {physics.get('total_weight_kg', 'N/A')} кг\n"
-            f"Моторы: {motor_prof.get('motor_type', 'N/A')}\n"
-            f"Винты: {motor_prof.get('propeller', {}).get('diameter_inches', '?')}\" "
-            f"({motor_prof.get('propeller', {}).get('blades_count', '?')}-blade)\n"
-            f"IMU/Датчики: Активны [HIL]"
-        )
-
-        rect = QRectF(10, 10, 240, 105)
-        painter.setPen(QPen(QColor("#333333"), 1))
-        painter.setBrush(QBrush(QColor(0, 0, 0, 180)))
-        painter.drawRoundedRect(rect, 5, 5)
-
-        painter.setPen(QColor("#CCCCCC"))
-        painter.drawText(rect.adjusted(8, 6, -8, -6), Qt.AlignLeft | Qt.AlignTop, info_text)
