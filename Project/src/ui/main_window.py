@@ -242,7 +242,7 @@ class MainWindow(QMainWindow):
 
   def on_config_applied(self, config_dict: dict):
     motors = config_dict.get("motors", [])
-    self.scenario_tab.update_motor_count(len(motors))
+    self.scenario_tab.apply_config_data(config_dict)
 
     # Если контроллер был подключен, при запуске работы меняем статус
     if self.connection_bar.current_status == StandStatus.READY:
