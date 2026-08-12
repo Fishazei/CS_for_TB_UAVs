@@ -1,253 +1,282 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QFileDialog, QMessageBox, QSplitter, QLabel,
-                             QComboBox, QGroupBox, QProgressBar)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-import logging
+import os
+import sys
+import yaml
 import numpy as np
+from PySide6.QtCore import Signal, QTimer
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QTextEdit, QFileDialog, QMessageBox, QSplitter, QGridLayout
+)
+import pyqtgraph as pg
 
-from src.ui.command_list_widget import CommandListWidget
-from src.ui.motor_graph_widget import MotorGraphWidget
-from src.core.transition_engine import TransitionType
-
-logger = logging.getLogger('MotorStand')
+# Настройка стиля графиков pyqtgraph под темную тему
+pg.setConfigOption('background', '#121212')
+pg.setConfigOption('foreground', '#CCCCCC')
 
 
 class ScenarioTab(QWidget):
-    """Вкладка управления сценариями"""
-
-    scenario_loaded = pyqtSignal(dict)  # Данные сценария
-    play_requested = pyqtSignal()  # Запрос на воспроизведение
-    stop_requested = pyqtSignal()  # Запрос на остановку
+    """
+    Вкладка загрузки, редактирования и исполнения сценариев,
+    а также отслеживания оборотов моторов в реальном времени.
+    """
+    scenario_started = Signal(dict)
+    scenario_stopped = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.current_scenario = None
-        self.is_playing = False
-        self.playback_timer = QTimer()
-        self.playback_timer.timeout.connect(self.update_playback)
-        self.playback_time = 0
-        self.setup_ui()
+        self.current_file_path = None
+        self.is_running = False
+        self.motor_count = 4  # По умолчанию 4 мотора (обновляется из конфига)
 
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
+        # Буферы данных для графиков (Ось X: Время, Ось Y: Обороты)
+        self.buffer_size = 200
+        self.time_data = np.linspace(-10, 0, self.buffer_size)
+        self.target_rpm_data = {}
+        self.actual_rpm_data = {}
 
-        # Верхняя панель управления
-        control_panel = QHBoxLayout()
+        # Графические объекты
+        self.plots = {}
+        self.curves_target = {}
+        self.curves_actual = {}
 
-        # Группа загрузки/сохранения
-        file_group = QGroupBox("Файл сценария")
+        self.init_ui()
+        self.init_buffers()
+
+        # Таймер эмуляции данных (для теста интерфейса до подключения HIL-модели)
+        self.sim_timer = QTimer()
+        self.sim_timer.setInterval(50)  # 20 Гц обновление
+        self.sim_timer.timeout.connect(self._emulate_telemetry_step)
+
+    def init_buffers(self):
+        """Инициализация буферов данных под текущее число моторов."""
+        self.target_rpm_data = {i: np.zeros(self.buffer_size) for i in range(1, self.motor_count + 1)}
+        self.actual_rpm_data = {i: np.zeros(self.buffer_size) for i in range(1, self.motor_count + 1)}
+
+    def update_motor_count(self, count: int):
+        """Перестраивает сетку графиков при изменении конфигурации стенда."""
+        if count != self.motor_count:
+            self.motor_count = count
+            self.init_buffers()
+            self._rebuild_plots_grid()
+
+    def init_ui(self):
+        main_layout = QVBoxLayout(self)
+        splitter = QSplitter()
+
+        # --- Левая панель: Редактор сценария ---
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
         file_layout = QHBoxLayout()
+        self.file_path_input = QLineEdit()
+        self.file_path_input.setPlaceholderText("Выберите файл сценария (.yaml / .json)...")
+        self.file_path_input.setReadOnly(True)
 
-        self.load_button = QPushButton("Загрузить")
-        self.load_button.clicked.connect(self.load_scenario)
-        file_layout.addWidget(self.load_button)
+        btn_browse = QPushButton("Обзор...")
+        btn_browse.clicked.connect(self.browse_file)
 
-        self.save_button = QPushButton("Сохранить")
-        self.save_button.clicked.connect(self.save_scenario)
-        file_layout.addWidget(self.save_button)
+        btn_save = QPushButton("Сохранить")
+        btn_save.clicked.connect(self.save_file)
 
-        self.scenario_name_label = QLabel("Сценарий не загружен")
-        self.scenario_name_label.setStyleSheet("color: #888;")
-        file_layout.addWidget(self.scenario_name_label)
+        self.btn_run = QPushButton("Запустить сценарий")
+        self.btn_run.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold;")
+        self.btn_run.clicked.connect(self.toggle_scenario)
 
-        file_group.setLayout(file_layout)
-        control_panel.addWidget(file_group)
+        file_layout.addWidget(QLabel("Сценарий:"))
+        file_layout.addWidget(self.file_path_input)
+        file_layout.addWidget(btn_browse)
+        file_layout.addWidget(btn_save)
+        file_layout.addWidget(self.btn_run)
 
-        # Группа генерации профилей
-        generate_group = QGroupBox("Генерация")
-        generate_layout = QHBoxLayout()
+        left_layout.addLayout(file_layout)
 
-        generate_layout.addWidget(QLabel("Тип перехода:"))
-        self.transition_combo = QComboBox()
-        self.transition_combo.addItems(["smooth", "linear", "none"])
-        generate_layout.addWidget(self.transition_combo)
+        # Текстовый редактор
+        self.scenario_editor = QTextEdit()
+        font = QFont("Consolas" if sys.platform == "win32" else "Monospace", 10)
+        self.scenario_editor.setFont(font)
+        self.scenario_editor.setPlaceholderText("Загрузите yaml/json файл сценария...")
+        left_layout.addWidget(self.scenario_editor)
 
-        self.generate_button = QPushButton("Сгенерировать профили")
-        self.generate_button.clicked.connect(self.generate_profiles)
-        generate_layout.addWidget(self.generate_button)
+        # Консоль логов сценариста
+        left_layout.addWidget(QLabel("Лог выполнения сценария:"))
+        self.log_console = QTextEdit()
+        self.log_console.setReadOnly(True)
+        self.log_console.setMaximumHeight(120)
+        self.log_console.setFont(font)
+        self.log_console.setStyleSheet("background-color: #1e1e1e; color: #00ff00;")
+        left_layout.addWidget(self.log_console)
 
-        generate_group.setLayout(generate_layout)
-        control_panel.addWidget(generate_group)
+        # --- Правая панель: Графики моторов ---
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Группа управления воспроизведением
-        play_group = QGroupBox("Воспроизведение")
-        play_layout = QHBoxLayout()
+        right_layout.addWidget(QLabel("Обороты моторов (Target vs Actual RPM):"))
 
-        self.play_button = QPushButton("▶ Воспроизвести")
-        self.play_button.setObjectName("successButton")
-        self.play_button.clicked.connect(self.toggle_playback)
-        play_layout.addWidget(self.play_button)
+        # Контейнер для сетки графиков
+        self.plots_container = QWidget()
+        self.plots_grid = QGridLayout(self.plots_container)
+        self.plots_grid.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(self.plots_container)
 
-        self.stop_button = QPushButton("■ Стоп")
-        self.stop_button.setObjectName("dangerButton")
-        self.stop_button.clicked.connect(self.stop_playback)
-        self.stop_button.setEnabled(False)
-        play_layout.addWidget(self.stop_button)
+        self._rebuild_plots_grid()
 
-        play_group.setLayout(play_layout)
-        control_panel.addWidget(play_group)
+        # Добавляем левую и правую панели в Splitter
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
 
-        layout.addLayout(control_panel)
+        main_layout.addWidget(splitter)
+        self.log_info("Модуль сценариев готов.")
 
-        # Прогресс-бар воспроизведения
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #444;
-                border-radius: 4px;
-                text-align: center;
-                color: #ccc;
-                background-color: #2b2b2b;
-            }
-            QProgressBar::chunk {
-                background-color: #4a9eff;
-                border-radius: 3px;
-            }
-        """)
-        layout.addWidget(self.progress_bar)
+    def _rebuild_plots_grid(self):
+        """Динамически перестраивает сетку графиков для моторов."""
+        # Очищаем старые графики из сетки
+        for i in reversed(range(self.plots_grid.count())):
+            widget = self.plots_grid.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
 
-        # Основной сплиттер
-        splitter = QSplitter(Qt.Horizontal)
+        self.plots.clear()
+        self.curves_target.clear()
+        self.curves_actual.clear()
 
-        # Левая панель - список команд
-        self.command_list = CommandListWidget()
-        self.command_list.commands_changed.connect(self.on_commands_changed)
-        splitter.addWidget(self.command_list)
+        # Размещаем графики в 2 колонки
+        cols = 2
+        for i in range(1, self.motor_count + 1):
+            plot_widget = pg.PlotWidget(title=f"Мотор M{i}")
+            plot_widget.setLabel('left', 'RPM')
+            plot_widget.setLabel('bottom', 'Время (с)')
+            plot_widget.showGrid(x=True, y=True, alpha=0.3)
 
-        # Правая панель - графики
-        self.motor_graph = MotorGraphWidget()
-        splitter.addWidget(self.motor_graph)
-
-        # Устанавливаем соотношение сторон
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-
-        layout.addWidget(splitter)
-
-    def update_motor_graphs(self, motor_count: int):
-        """Обновить графики при изменении количества моторов"""
-        motor_names = {i + 1: f"Мотор {i + 1}" for i in range(motor_count)}
-        self.motor_graph.create_motor_plots(motor_count, motor_names)
-
-    def load_scenario(self):
-        """Загрузить сценарий из файла"""
-        try:
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "Выберите файл сценария",
-                "", "YAML files (*.yaml *.yml);;All files (*.*)"
+            # Линия планируемых оборотов (Target) — Пунктирная желтая
+            curve_target = plot_widget.plot(
+                pen=pg.mkPen(color='#FFD54F', width=2, style=pg.QtCore.Qt.DashLine),
+                name="Target"
+            )
+            # Линия реальных оборотов (Actual) — Зеленая
+            curve_actual = plot_widget.plot(
+                pen=pg.mkPen(color='#00E676', width=2),
+                name="Actual"
             )
 
-            if file_path:
-                # Здесь должна быть загрузка через ScenarioManager
-                # Пока просто эмулируем
-                logger.info(f"Сценарий загружен из {file_path}")
-                self.scenario_name_label.setText(file_path.split('/')[-1])
-                self.scenario_name_label.setStyleSheet("color: #44bb44;")
-                QMessageBox.information(self, "Успех", "Сценарий загружен!")
+            self.plots[i] = plot_widget
+            self.curves_target[i] = curve_target
+            self.curves_actual[i] = curve_actual
 
-        except Exception as e:
-            logger.error(f"Ошибка загрузки сценария: {str(e)}")
-            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить сценарий:\n{str(e)}")
+            row = (i - 1) // cols
+            col = (i - 1) % cols
+            self.plots_grid.addWidget(plot_widget, row, col)
 
-    def save_scenario(self):
-        """Сохранить сценарий в файл"""
+    def log_info(self, message: str):
+        self.log_console.append(f"[INFO] {message}")
+
+    def log_error(self, message: str):
+        self.log_console.append(f"[ERROR] {message}")
+
+    def browse_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите файл сценария", "", "Scenario Files (*.yaml *.yml *.json);;All Files (*)"
+        )
+        if file_path:
+            self.current_file_path = file_path
+            self.file_path_input.setText(file_path)
+            self.load_file(file_path)
+
+    def load_file(self, path: str):
         try:
+            with open(path, "r", encoding="utf-8") as f:
+                self.scenario_editor.setText(f.read())
+            self.log_info(f"Сценарий загружен: {os.path.basename(path)}")
+        except Exception as e:
+            self.log_error(f"Ошибка загрузки сценария: {e}")
+
+    def save_file(self):
+        if not self.current_file_path:
             file_path, _ = QFileDialog.getSaveFileName(
-                self, "Сохранить сценарий",
-                "scenario.yaml", "YAML files (*.yaml *.yml);;All files (*.*)"
+                self, "Сохранить сценарий", "mission.yaml", "YAML Files (*.yaml *.yml);;JSON Files (*.json)"
             )
+            if not file_path:
+                return
+            self.current_file_path = file_path
+            self.file_path_input.setText(file_path)
 
-            if file_path:
-                # Здесь должно быть сохранение через ScenarioManager
-                logger.info(f"Сценарий сохранен в {file_path}")
-                QMessageBox.information(self, "Успех", "Сценарий сохранен!")
-
-        except Exception as e:
-            logger.error(f"Ошибка сохранения сценария: {str(e)}")
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить сценарий:\n{str(e)}")
-
-    def on_commands_changed(self, commands):
-        """Обработчик изменения списка команд"""
-        logger.debug(f"Список команд обновлен: {len(commands)} команд")
-        # Здесь можно автоматически перегенерировать профили
-
-    def generate_profiles(self):
-        """Сгенерировать профили мощности"""
         try:
-            transition_type = TransitionType[self.transition_combo.currentText().upper()]
-            logger.info(f"Генерация профилей с типом перехода: {transition_type.value}")
-
-            # Здесь должен быть вызов генерации через ScenarioManager
-            # Пока создадим тестовые данные
-            motor_count = 4  # Должно браться из текущего конфига
-            time_points = np.linspace(0, 5000, 500)
-
-            # Генерируем тестовые профили
-            motor_profiles = {}
-            for i in range(motor_count):
-                motor_id = i + 1
-                # Разные профили для разных моторов
-                base = np.sin(time_points / 1000 * np.pi * (i + 1)) * 0.3 + 0.6
-                motor_profiles[motor_id] = np.clip(base, 0, 1)
-
-            # Обновляем графики
-            maneuver_times = [
-                (1000, "Висение"),
-                (2000, "Подъем"),
-                (3500, "Крен")
-            ]
-
-            self.motor_graph.update_profiles(time_points, motor_profiles, maneuver_times)
-            logger.info("Профили сгенерированы успешно")
-
+            with open(self.current_file_path, "w", encoding="utf-8") as f:
+                f.write(self.scenario_editor.toPlainText())
+            self.log_info(f"Сценарий сохранен: {os.path.basename(self.current_file_path)}")
         except Exception as e:
-            logger.error(f"Ошибка генерации профилей: {str(e)}")
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сгенерировать профили:\n{str(e)}")
+            self.log_error(f"Ошибка сохранения: {e}")
 
-    def toggle_playback(self):
-        """Запуск/пауза воспроизведения"""
-        if not self.is_playing:
-            self.start_playback()
+    def toggle_scenario(self):
+        if not self.is_running:
+            raw_text = self.scenario_editor.toPlainText().strip()
+            if not raw_text:
+                QMessageBox.warning(self, "Ошибка", "Нельзя запустить пустой сценарий!")
+                return
+
+            try:
+                parsed_scenario = yaml.safe_load(raw_text)
+                self.is_running = True
+                self.btn_run.setText("Остановить сценарий")
+                self.btn_run.setStyleSheet("background-color: #c62828; color: white; font-weight: bold;")
+                self.log_info("Сценарий запущен.")
+
+                self.sim_timer.start()
+                self.scenario_started.emit(parsed_scenario)
+            except Exception as e:
+                self.log_error(f"Ошибка парсинга сценария: {e}")
+                QMessageBox.critical(self, "Ошибка", f"Не удалось прочитать сценарий:\n{e}")
         else:
-            self.pause_playback()
+            self.is_running = False
+            self.sim_timer.stop()
+            self.btn_run.setText("Запустить сценарий")
+            self.btn_run.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold;")
+            self.log_info("Сценарий остановлен пользователем.")
+            self.scenario_stopped.emit()
 
-    def start_playback(self):
-        """Начать воспроизведение"""
-        self.is_playing = True
-        self.play_button.setText("⏸ Пауза")
-        self.stop_button.setEnabled(True)
-        self.playback_time = 0
-        self.playback_timer.start(20)  # 50 Hz
-        logger.info("Воспроизведение начато")
+    def update_telemetry(self, telemetry_dict: dict):
+        """
+        Принимает живые данные оборотов от HIL-модели / контроллера и обновляет графики.
+        Ожидаемая структура telemetry_dict:
+        {
+           'target_rpm': {1: 12000, 2: 12000, 3: 12000, 4: 12000},
+           'actual_rpm': {1: 11850, 2: 11920, 3: 11800, 4: 12050}
+        }
+        """
+        target_rpm = telemetry_dict.get("target_rpm", {})
+        actual_rpm = telemetry_dict.get("actual_rpm", {})
 
-    def pause_playback(self):
-        """Приостановить воспроизведение"""
-        self.is_playing = False
-        self.play_button.setText("▶ Продолжить")
-        self.playback_timer.stop()
-        logger.info("Воспроизведение приостановлено")
+        for m_id in range(1, self.motor_count + 1):
+            if m_id in self.target_rpm_data:
+                # Сдвиг буфера влево
+                self.target_rpm_data[m_id] = np.roll(self.target_rpm_data[m_id], -1)
+                self.actual_rpm_data[m_id] = np.roll(self.actual_rpm_data[m_id], -1)
 
-    def stop_playback(self):
-        """Остановить воспроизведение"""
-        self.is_playing = False
-        self.play_button.setText("▶ Воспроизвести")
-        self.stop_button.setEnabled(False)
-        self.playback_timer.stop()
-        self.playback_time = 0
-        self.motor_graph.update_time_indicator(0)
-        self.progress_bar.setValue(0)
-        logger.info("Воспроизведение остановлено")
+                # Запись нового значения в конец
+                self.target_rpm_data[m_id][-1] = target_rpm.get(m_id, 0)
+                self.actual_rpm_data[m_id][-1] = actual_rpm.get(m_id, 0)
 
-    def update_playback(self):
-        """Обновить индикатор воспроизведения"""
-        self.playback_time += 20
-        self.motor_graph.update_time_indicator(self.playback_time)
+                # Обновление графических кривых
+                self.curves_target[m_id].setData(self.time_data, self.target_rpm_data[m_id])
+                self.curves_actual[m_id].setData(self.time_data, self.actual_rpm_data[m_id])
 
-        # Обновляем прогресс-бар
-        if hasattr(self, 'total_duration') and self.total_duration > 0:
-            progress = int((self.playback_time / self.total_duration) * 100)
-            self.progress_bar.setValue(min(progress, 100))
+    def _emulate_telemetry_step(self):
+        """Тестовая эмуляция реакции моторов для проверки плавности графиков."""
+        target = {}
+        actual = {}
 
-        # Проверяем окончание
-        if hasattr(self, 'total_duration') and self.playback_time >= self.total_duration:
-            self.stop_playback()
+        base_rpm = 15000 + 3000 * np.sin(pg.ptime.time() * 2)
+
+        for i in range(1, self.motor_count + 1):
+            t_rpm = base_rpm + (i * 500)
+            target[i] = t_rpm
+
+            # Инерция мотора + небольшие шумы
+            last_actual = self.actual_rpm_data[i][-1]
+            actual[i] = last_actual + 0.2 * (t_rpm - last_actual) + np.random.normal(0, 50)
+
+        self.update_telemetry({"target_rpm": target, "actual_rpm": actual})

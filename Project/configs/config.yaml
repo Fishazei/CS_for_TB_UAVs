@@ -1,0 +1,46 @@
+version: "1.0"
+drone_name: "Custom_Quad_X"
+
+# Физические свойства аппарата
+physics:
+  total_weight_kg: 1.8         # Полная масса
+  center_of_mass_offset_m:     # Смещение центра масс [x, y, z] от геом. центра
+    x: 0.0
+    y: 0.0
+    z: 0.0
+
+# Характеристики силовых установок (мотор + винт)
+motor_profile:
+  motor_type: "2207_2450KV"
+  propeller:
+    diameter_inches: 5.0
+    pitch_inches: 4.3
+    blades_count: 3
+  # Аэродинамические коэффициенты (F = C_t * w^2, M = C_m * w^2)
+  coefficients:
+    thrust_coefficient_Ct: 1.15e-6   # Коэффициент тяги
+    drag_coefficient_Cm: 1.82e-8     # Коэффициент момента сопротивления
+    max_rpm: 28000
+    time_constant_tau: 0.03          # Инерция мотора (время разгона, сек)
+
+# Геометрия расположения двигателей
+motors:
+  - id: 1
+    position_m: [ 0.15,  0.15, 0.0]  # [X, Y, Z] относительно ЦМ
+    rotation_deg: [0.0, 0.0]        # [Угол_тангажа, Угол_крена] мотора (наклон)
+    spin_direction: "CCW"            # Направление вращения: CW (по) или CCW (против)
+
+  - id: 2
+    position_m: [-0.15,  0.15, 0.0]
+    rotation_deg: [0.0, 0.0]
+    spin_direction: "CW"
+
+  - id: 3
+    position_m: [-0.15, -0.15, 0.0]
+    rotation_deg: [0.0, 0.0]
+    spin_direction: "CCW"
+
+  - id: 4
+    position_m: [ 0.15, -0.15, 0.0]
+    rotation_deg: [0.0, 0.0]
+    spin_direction: "CW"

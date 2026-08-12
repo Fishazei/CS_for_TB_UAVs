@@ -1,162 +1,255 @@
-# ui/main_window.py
-from PyQt5.QtWidgets import (QMainWindow, QTabWidget, QVBoxLayout,
-                             QWidget, QStatusBar, QMessageBox, QMenuBar,
-                             QAction, QMenu, QApplication)
-from PyQt5.QtCore import Qt, pyqtSlot
+"""
+import os
 import sys
-import logging
-
-from src.ui.config_tab import ConfigTab
-from src.ui.scenario_tab import ScenarioTab
-from src.ui.log_console import LogConsole
-from src.utils.logger import setup_logger
-
-logger = logging.getLogger('MotorStand')
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setup_logging()
-        self.setup_ui()
-        self.setup_menu()
-        self.setup_status_bar()
+  # Сигнал, передающий текст конфигурации при нажатии "Применить"
+  config_applied = Signal(str)
 
-        logger.info("Приложение запущено")
+  def __init__(self):
+    super().__init__()
+    self.current_file_path = None
+    self.init_ui()
 
-    def setup_logging(self):
-        """Настройка логирования"""
-        self.logger_instance, self.log_signal = setup_logger()
+  def init_ui(self):
+    self.setWindowTitle(
+        "HIL Testbed Control Panel — Система управления стендом"
+    )
+    self.resize(1000, 700)
 
-        # Подключаем сигнал к консоли
-        self.log_signal.new_log.connect(self.append_log)
+    # Главный виджет с вкладками
+    self.tabs = QTabWidget()
+    self.setCentralWidget(self.tabs)
 
-    def setup_ui(self):
-        """Настройка пользовательского интерфейса"""
-        self.setWindowTitle("Motor Stand Controller v2.0")
-        self.setGeometry(100, 100, 1400, 900)
+    # Создаем вкладку конфигурации
+    self.tab_config = QWidget()
+    self.init_config_tab()
 
-        # Центральный виджет
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+    # Заглушка под вторую вкладку
+    self.tab_scenarios = QWidget()
+    self.init_scenarios_tab()
 
-        main_layout = QVBoxLayout(central_widget)
+    # Добавляем вкладки
+    self.tabs.addTab(self.tab_config, "Настройка конфигурации")
+    self.tabs.addTab(
+        self.tab_scenarios, "Формирование и запуск сценариев (В разработке)"
+    )
 
-        # Вкладки
-        self.tabs = QTabWidget()
+  def init_config_tab(self):
+    layout = QVBoxLayout()
 
-        # Вкладка конфигурации
-        self.config_tab = ConfigTab()
-        self.config_tab.config_applied.connect(self.on_config_applied)
-        self.config_tab.motors_count_changed.connect(self.on_motors_count_changed)
-        self.tabs.addTab(self.config_tab, "⚙ Конфигурация")
+    # --- Верхняя панель управления файлами ---
+    file_layout = QHBoxLayout()
 
-        # Вкладка сценариев
-        self.scenario_tab = ScenarioTab()
-        self.tabs.addTab(self.scenario_tab, "📋 Сценарии")
+    self.file_path_input = QLineEdit()
+    self.file_path_input.setPlaceholderText("Выберите файл конфигурации...")
+    self.file_path_input.setReadOnly(True)
 
-        main_layout.addWidget(self.tabs, stretch=3)
+    btn_browse = QPushButton("Обзор...")
+    btn_browse.clicked.connect(self.browse_file)
 
-        # Консоль логов
-        self.log_console = LogConsole()
-        main_layout.addWidget(self.log_console, stretch=1)
+    btn_save = QPushButton("Сохранить")
+    btn_save.clicked.connect(self.save_file)
 
-    def setup_menu(self):
-        """Настройка меню"""
-        menubar = self.menuBar()
+    btn_apply = QPushButton("Применить конфигурацию")
+    # Выделяем главную кнопку цветом
+    btn_apply.setStyleSheet(
+        "background-color: #2e7d32; color: white; font-weight: bold;"
+    )
+    btn_apply.clicked.connect(self.apply_config)
 
-        # Меню Файл
-        file_menu = menubar.addMenu("Файл")
+    file_layout.addWidget(QLabel("Файл:"))
+    file_layout.addWidget(self.file_path_input)
+    file_layout.addWidget(btn_browse)
+    file_layout.addWidget(btn_save)
+    file_layout.addWidget(btn_apply)
 
-        load_config_action = QAction("Загрузить конфиг", self)
-        load_config_action.triggered.connect(self.config_tab.load_config)
-        file_menu.addAction(load_config_action)
+    layout.addLayout(file_layout)
 
-        save_config_action = QAction("Сохранить конфиг", self)
-        save_config_action.triggered.connect(self.save_config)
-        file_menu.addAction(save_config_action)
+    # --- Текстовый редактор конфигурации ---
+    self.config_editor = QTextEdit()
+    # Устанавливаем моноширинный шрифт для удобного чтения YAML/JSON
+    font = QFont("Consolas" if sys.platform == "win32" else "Monospace", 11)
+    self.config_editor.setFont(font)
+    self.config_editor.setPlaceholderText(
+        "Откройте файл конфигурации (.yaml / .json) или введите параметры"
+        " вручную..."
+    )
 
-        file_menu.addSeparator()
+    layout.addWidget(self.config_editor)
 
-        exit_action = QAction("Выход", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+    # --- Консоль логов ---
+    layout.addWidget(QLabel("Лог событий:"))
+    self.log_console = QTextEdit()
+    self.log_console.setReadOnly(True)
+    self.log_console.setMaximumHeight(150)
+    self.log_console.setFont(font)
+    self.log_console.setStyleSheet(
+        "background-color: #1e1e1e; color: #00ff00;"
+    )
 
-        # Меню Сценарий
-        scenario_menu = menubar.addMenu("Сценарий")
+    layout.addWidget(self.log_console)
 
-        new_scenario_action = QAction("Новый сценарий", self)
-        scenario_menu.addAction(new_scenario_action)
+    self.tab_config.setLayout(layout)
+    self.log_info("Интерфейс инициализирован.")
 
-        load_scenario_action = QAction("Загрузить сценарий", self)
-        load_scenario_action.triggered.connect(self.scenario_tab.load_scenario)
-        scenario_menu.addAction(load_scenario_action)
+  def init_scenarios_tab(self):
+    layout = QVBoxLayout()
+    label = QLabel("Здесь будет интерфейс выполнения сценариев и графика")
+    layout.addWidget(label)
+    self.tab_scenarios.setLayout(layout)
 
-        save_scenario_action = QAction("Сохранить сценарий", self)
-        save_scenario_action.triggered.connect(self.scenario_tab.save_scenario)
-        scenario_menu.addAction(save_scenario_action)
+  # --- Вспомогательные методы и слоты ---
 
-        # Меню Вид
-        view_menu = menubar.addMenu("Вид")
+  def log_info(self, message: str):
+    self.log_console.append(f"[INFO] {message}")
 
-        clear_log_action = QAction("Очистить логи", self)
-        clear_log_action.triggered.connect(self.log_console.clear_logs)
-        view_menu.addAction(clear_log_action)
+  def log_error(self, message: str):
+    self.log_console.append(f"[ERROR] {message}")
 
-        # Меню Помощь
-        help_menu = menubar.addMenu("Помощь")
+  def browse_file(self):
+    file_path, _ = QFileDialog.getOpenFileName(
+        self,
+        "Выберите файл конфигурации",
+        "",
+        "Config Files (*.yaml *.yml *.json);;All Files (*)",
+    )
+    if file_path:
+      self.current_file_path = file_path
+      self.file_path_input.setText(file_path)
+      self.load_file(file_path)
 
-        about_action = QAction("О программе", self)
-        about_action.triggered.connect(self.show_about)
-        help_menu.addAction(about_action)
+  def load_file(self, path: str):
+    try:
+      with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+        self.config_editor.setText(content)
+      self.log_info(f"Файл успешно загружен: {path}")
+    except Exception as e:
+      self.log_error(f"Ошибка при чтении файла: {e}")
 
-    def setup_status_bar(self):
-        """Настройка строки состояния"""
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Готов к работе")
+  def save_file(self):
+    if not self.current_file_path:
+      # Если файл еще не выбирался, открываем "Сохранить как"
+      file_path, _ = QFileDialog.getSaveFileName(
+          self,
+          "Сохранить конфигурацию",
+          "config.yaml",
+          "YAML Files (*.yaml *.yml);;JSON Files (*.json);;All Files (*)",
+      )
+      if not file_path:
+        return
+      self.current_file_path = file_path
+      self.file_path_input.setText(file_path)
 
-    @pyqtSlot(str, str)
-    def append_log(self, level: str, message: str):
-        """Добавить лог в консоль"""
-        self.log_console.append_log(level, message)
+    try:
+      content = self.config_editor.toPlainText()
+      with open(self.current_file_path, "w", encoding="utf-8") as f:
+        f.write(content)
+      self.log_info(f"Конфигурация сохранена в файл: {self.current_file_path}")
+    except Exception as e:
+      self.log_error(f"Ошибка при сохранении файла: {e}")
 
-    @pyqtSlot(dict)
-    def on_config_applied(self, config: dict):
-        """Обработчик применения конфигурации"""
-        motor_count = len(config.get('motors', []))
-        self.scenario_tab.update_motor_graphs(motor_count)
-        self.status_bar.showMessage(f"Конфигурация применена: {motor_count} моторов")
+  def apply_config(self):
+    content = self.config_editor.toPlainText().strip()
+    if not content:
+      QMessageBox.warning(
+          self, "Предупреждение", "Нельзя применить пустую конфигурацию!"
+      )
+      self.log_error("Попытка применить пустую конфигурацию.")
+      return
 
-    @pyqtSlot(int)
-    def on_motors_count_changed(self, count: int):
-        """Обработчик изменения количества моторов"""
-        self.scenario_tab.update_motor_graphs(count)
+    self.log_info("Применение конфигурации к физической модели...")
+    # Генерируем сигнал (в будущем его подхватит физмодель / сервис)
+    self.config_applied.emit(content)
+"""
+import random
 
-    def save_config(self):
-        """Сохранить конфигурацию"""
-        # Здесь можно реализовать сохранение текущего конфига
-        logger.info("Сохранение конфигурации")
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QWidget, QVBoxLayout
+from src.ui.config_tab import ConfigTab
+from src.ui.scenario_tab import ScenarioTab
+from src.ui.connection_bar import ConnectionBar, StandStatus
 
-    def show_about(self):
-        """Показать окно "О программе" """
-        QMessageBox.about(self, "О программе",
-                          "Motor Stand Controller v2.0\n\n"
-                          "Система управления стендом имитации моторных групп дронов\n\n"
-                          "© 2024"
-                          )
+class MainWindow(QMainWindow):
 
-    def closeEvent(self, event):
-        """Обработчик закрытия окна"""
-        reply = QMessageBox.question(
-            self, 'Подтверждение выхода',
-            'Вы уверены, что хотите выйти?',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+  def __init__(self):
+    super().__init__()
+    self.init_ui()
 
-        if reply == QMessageBox.Yes:
-            logger.info("Приложение закрыто")
-            event.accept()
-        else:
-            event.ignore()
+  def init_ui(self):
+    self.setWindowTitle(
+        "HIL Stand Control Panel — Система управления стендом"
+    )
+    self.resize(1150, 800)
+
+    # Главный контейнер
+    central_widget = QWidget()
+    main_layout = QVBoxLayout(central_widget)
+    main_layout.setContentsMargins(8, 8, 8, 8)
+    self.setCentralWidget(central_widget)
+
+    # 1. Сквозная панель подключения (видна в любом окне)
+    self.connection_bar = ConnectionBar()
+    self.connection_bar.connect_requested.connect(self.on_connect)
+    self.connection_bar.disconnect_requested.connect(self.on_disconnect)
+    main_layout.addWidget(self.connection_bar)
+
+    # 2. Вкладки приложения
+    self.tabs = QTabWidget()
+    self.config_tab = ConfigTab()
+    self.scenario_tab = ScenarioTab()
+
+    self.config_tab.config_applied.connect(self.on_config_applied)
+
+    self.tabs.addTab(self.config_tab, "Настройка конфигурации")
+    self.tabs.addTab(self.scenario_tab, "Сценарии и Мониторинг")
+    main_layout.addWidget(self.tabs)
+
+    # Таймер для демонстрации эмуляции скорости передачи
+    self.speed_timer = QTimer()
+    self.speed_timer.setInterval(200)
+    self.speed_timer.timeout.connect(self._update_speed_mock)
+
+  def on_connect(self):
+    """Имитация процесса подключения к ПК."""
+    self.connection_bar.set_status(StandStatus.CONNECTING)
+    # Через 1.5 сек переводим в статус READY
+    QTimer.singleShot(
+        1500, lambda: self.connection_bar.set_status(StandStatus.READY)
+    )
+
+  def on_disconnect(self):
+    """Принудительное отключение."""
+    self.speed_timer.stop()
+    self.connection_bar.set_status(StandStatus.OFF)
+
+  def on_config_applied(self, config_dict: dict):
+    motors = config_dict.get("motors", [])
+    self.scenario_tab.update_motor_count(len(motors))
+
+    # Если контроллер был подключен, при запуске работы меняем статус
+    if self.connection_bar.current_status == StandStatus.READY:
+      self.connection_bar.set_status(StandStatus.WORKING)
+      self.speed_timer.start()
+
+  def _update_speed_mock(self):
+    """Генерация псевдо-данных скорости потока MAVLink."""
+    fake_speed = random.uniform(112.0, 128.5)
+    self.connection_bar.set_transfer_speed(fake_speed)

@@ -1,0 +1,44 @@
+version: "1.0"
+mission_title: "Автоматический взлёт и маневрирование"
+
+scenario:
+  # Шаг 1: Взлет
+  - step: 1
+    command: "TAKEOFF"
+    params:
+      climb_rate_ms: 1.5        # Подъем со скоростью 1.5 м/с
+      target_altitude_m: 5.0    # Метраж (целевая высота)
+    timeout_sec: 10.0
+
+  # Шаг 2: Удержание высоты и поворот по рысканью
+  - step: 2
+    command: "YAW_CONTROL"
+    params:
+      target_angle_deg: 90.0    # Поворот на 90 градусов
+      yaw_rate_deg_s: 30.0      # Скорость поворота
+    timeout_sec: 5.0
+
+  # Шаг 3: Наклон по тангажу (движение вперед)
+  - step: 3
+    command: "ATTITUDE_SETPOINT"
+    params:
+      pitch_deg: 10.0           # Тангаж +10 град (нос вниз)
+      roll_deg: 0.0             # Крен
+      duration_sec: 3.0         # Длительность маневра
+    timeout_sec: 5.0
+
+  # Шаг 4: Наклон по крену (смещение вбок)
+  - step: 4
+    command: "ATTITUDE_SETPOINT"
+    params:
+      pitch_deg: 0.0
+      roll_deg: -15.0           # Крен -15 град (влево)
+      duration_sec: 2.0
+    timeout_sec: 5.0
+
+  # Шаг 5: Посадка
+  - step: 5
+    command: "LAND"
+    params:
+      descent_rate_ms: 0.8
+    timeout_sec: 15.0
